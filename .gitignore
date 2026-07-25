@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+
+# MacOS
+.DS_Store
+
+# 4D-Humans (separate cloned repo — clone it independently, see README)
+4D-Humans/
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.env
+.venv
+
+# Models (HMR2 / SMPL / YOLO) — download manually, see README
+*.pt
+*.pkl
+*.ckpt
+body_models/
+4D-Humans/data/*.pkl
+
+# Input/output directories
+4D-Humans/example_data/images/
+4D-Humans/demo_out/
+web/backend/demo_out/
+web/backend/example_data/
+
+# Large installer files
+*.sh
+
+# Logs
+*.log

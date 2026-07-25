@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BodyScan - AI Body Composition</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css?v=3">
+    
+    <!-- Three.js Import Map -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Section 1: Hero + Upload -->
+        <section id="upload-section" class="active">
+            <header class="hero">
+                <h1 class="gradient-text">BodyScan</h1>
+                <p class="tagline">AI-Powered Body Composition Analysis</p>
+            </header>
+            
+            <div class="upload-container">
+                <div id="drop-zone" class="drop-zone">
+                    <div class="upload-icon">📁</div>
+                    <p>Drag and drop your images here</p>
+                    <p class="muted">or</p>
+                    <label for="file-input" class="btn primary-btn">Browse Files</label>
+                    <input type="file" id="file-input" multiple accept=".jpg,.jpeg,.png" hidden>
+                    <p class="formats muted">Accepts JPG, JPEG, PNG</p>
+                </div>
+                
+                <div id="preview-container" class="preview-container hidden">
+                    <h3>Selected Files</h3>
+                    <div id="thumbnail-grid" class="thumbnail-grid"></div>
+                    <button id="analyze-btn" class="btn action-btn glow">Analyze</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Section 2: Processing -->
+        <section id="processing-section">
+            <div class="processing-container">
+                <div class="spinner"></div>
+                <h2 id="status-text">Uploading...</h2>
+                <p class="muted">Please wait while our AI analyzes the images.</p>
+            </div>
+        </section>
+
+        <!-- Section 3: Results Dashboard -->
+        <section id="results-section">
+            <header class="results-header">
+                <h2>Analysis Results</h2>
+                <div class="actions">
+                    <button id="download-csv-btn" class="btn secondary-btn">Download CSV</button>
+                    <button id="new-analysis-btn" class="btn primary-btn">New Analysis</button>
+                </div>
+            </header>
+            
+            <div id="results-container" class="results-container">
+                <!-- Dynamic Content Goes Here -->
+            </div>
+        </section>
+    </div>
+
+    <!-- Section 4: 3D Viewer Modal -->
+    <div id="viewer-modal" class="modal hidden">
+        <div class="modal-content">
+            <button id="close-viewer-btn" class="close-btn">&times;</button>
+            <div id="3d-canvas-container"></div>
+        </div>
+    </div>
+
+    <script type="module" src="app.js?v=3"></script>
+</body>
+</html>
