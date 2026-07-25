@@ -1,4 +1,4 @@
-# ProjectNomad — Body Composition Estimator
+# AIBodyScanner — Body Composition Estimator
 
 An AI-powered web app that estimates body composition metrics (waist-to-height ratio) from a single photo. Upload an image of a person, and the system outputs their estimated waist circumference, height, and health classification.
 
@@ -66,7 +66,7 @@ These are based on established clinical guidelines.
 ## Project structure
 
 ```
-ProjectNomad/
+AIBodyScanner/
 ├── 4DHumans_mps_patches.patch  # Patch to make 4D-Humans run on Apple Silicon
 ├── 4D-Humans/                  # Clone this separately — not included in repo
 │   ├── example_data/images/    # Input images go here temporarily
@@ -92,8 +92,8 @@ Complete setup in order:
 
 **1. Clone this repo**
 ```bash
-git clone https://github.com/yourusername/ProjectNomad.git
-cd ProjectNomad
+git clone https://github.com/AnanthCSE379/AIBodyScanner.git
+cd AIBodyScanner
 ```
 
 **2. Clone 4D-Humans and apply the MPS patch**
