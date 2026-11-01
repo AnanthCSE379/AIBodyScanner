@@ -1,396 +1,332 @@
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { openViewer, closeViewer } from './viewer.js?v=8';
 
-const API_BASE = '';
-
-// State
-let selectedFiles = [];
-let currentJobId = null;
-let currentScene = null;
-let currentRenderer = null;
-let animationId = null;
-let controls = null;
-
-// DOM Elements
-const sections = {
-    upload: document.getElementById('upload-section'),
-    processing: document.getElementById('processing-section'),
-    results: document.getElementById('results-section')
+const MAX_FILES = 10;
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+const POLL_INTERVAL_MS = 2000;
+const STATUS_COLORS = {
+    Underweight: 'under',
+    Healthy: 'healthy',
+    'Increased Risk': 'increased',
+    'High Risk': 'high',
 };
 
-const dropZone = document.getElementById('drop-zone');
-const fileInput = document.getElementById('file-input');
-const previewContainer = document.getElementById('preview-container');
-const thumbnailGrid = document.getElementById('thumbnail-grid');
-const analyzeBtn = document.getElementById('analyze-btn');
-const statusText = document.getElementById('status-text');
-const resultsContainer = document.getElementById('results-container');
-const downloadCsvBtn = document.getElementById('download-csv-btn');
-const newAnalysisBtn = document.getElementById('new-analysis-btn');
-const viewerModal = document.getElementById('viewer-modal');
-const closeViewerBtn = document.getElementById('close-viewer-btn');
-const canvasContainer = document.getElementById('3d-canvas-container');
+const byId = id => document.getElementById(id);
+const fileInput = byId('file-input');
+const dropZone = byId('drop-zone');
+const analyze = byId('analyze-btn');
+const statusText = byId('status-text');
+const errorBox = byId('app-error');
+const csvButton = byId('download-csv-btn');
+const resultsContainer = byId('results-container');
+let selectedFiles = [];
+let previewUrls = [];
+let cachedResults = [];
+let currentJobId = null;
+let activeRequest = null;
+let pollTimer = null;
 
-// Event Listeners
-dropZone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    dropZone.classList.add('dragover');
-});
-
-dropZone.addEventListener('dragleave', () => {
-    dropZone.classList.remove('dragover');
-});
-
-dropZone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    dropZone.classList.remove('dragover');
-    if (e.dataTransfer.files.length) {
-        handleFiles(e.dataTransfer.files);
-    }
-});
-
-fileInput.addEventListener('change', (e) => {
-    if (e.target.files.length) {
-        handleFiles(e.target.files);
-    }
-});
-
-analyzeBtn.addEventListener('click', () => {
-    if (selectedFiles.length > 0) {
-        uploadImages(selectedFiles);
-    }
-});
-
-newAnalysisBtn.addEventListener('click', resetApp);
-downloadCsvBtn.addEventListener('click', () => downloadCSV(currentJobId));
-closeViewerBtn.addEventListener('click', closeViewer);
-
-function switchSection(sectionId) {
-    Object.values(sections).forEach(sec => sec.classList.remove('active'));
-    sections[sectionId].classList.add('active');
+function element(tag, className = '', text = '') {
+    const node = document.createElement(tag);
+    node.className = className;
+    node.textContent = text;
+    return node;
 }
 
-function handleFiles(files) {
-    const validFiles = Array.from(files).filter(f => f.type.match('image.*'));
-    if (validFiles.length > 0) {
-        // Append to existing
-        selectedFiles = [...selectedFiles, ...validFiles];
-        
-        thumbnailGrid.innerHTML = '';
-        selectedFiles.forEach(file => {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                const img = document.createElement('img');
-                img.src = e.target.result;
-                img.className = 'thumbnail';
-                thumbnailGrid.appendChild(img);
-            };
-            reader.readAsDataURL(file);
-        });
-
-        previewContainer.classList.remove('hidden');
+function switchSection(name) {
+    for (const section of document.querySelectorAll('.app-container > section')) {
+        section.classList.toggle('active', section.id === `${name}-section`);
     }
 }
 
-async function uploadImages(files) {
-    switchSection('processing');
-    statusText.textContent = "Uploading...";
-    
-    const formData = new FormData();
-    files.forEach(file => formData.append('files', file));
+function showError(message) {
+    errorBox.textContent = message;
+    errorBox.hidden = !message;
+}
 
+// Each upload/poll chain owns a controller. Ignore responses from older chains.
+function stopRequests() {
+    clearTimeout(pollTimer);
+    activeRequest?.abort();
+    activeRequest = null;
+}
+
+async function getJSON(url, options = {}) {
+    const response = await fetch(url, options);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        const message = typeof data.detail === 'string'
+            ? data.detail
+            : `Request failed (HTTP ${response.status}).`;
+        throw new Error(message);
+    }
+    return data;
+}
+
+function renderPreviews() {
+    previewUrls.forEach(url => URL.revokeObjectURL(url));
+    previewUrls = [];
+    const grid = byId('thumbnail-grid');
+    grid.replaceChildren();
+    selectedFiles.forEach((file, index) => {
+        const item = element('div', 'preview-item');
+        const image = element('img', 'thumbnail');
+        image.src = URL.createObjectURL(file);
+        image.alt = file.name;
+        previewUrls.push(image.src);
+        const remove = element('button', 'remove-file', 'Remove');
+        remove.setAttribute('aria-label', `Remove ${file.name}`);
+        remove.onclick = () => {
+            selectedFiles.splice(index, 1);
+            renderPreviews();
+        };
+        item.append(image, element('span', 'preview-name', file.name), remove);
+        grid.append(item);
+    });
+    byId('preview-container').classList.toggle('hidden', !selectedFiles.length);
+    analyze.disabled = !selectedFiles.length;
+}
+
+function addFiles(incoming) {
+    showError('');
+    const errors = [];
+    for (const file of incoming) {
+        const supportedExtension = /\.(jpe?g|png)$/i.test(file.name);
+        const supportedType = !file.type || ['image/jpeg', 'image/png'].includes(file.type);
+        if (!supportedExtension || !supportedType) {
+            errors.push(`${file.name}: select a JPEG or PNG.`);
+        } else if (file.size > MAX_FILE_BYTES) {
+            errors.push(`${file.name}: the limit is 20 MB per image.`);
+        } else if (selectedFiles.length >= MAX_FILES) {
+            errors.push('Select at most 10 images per analysis.');
+            break;
+        } else {
+            selectedFiles.push(file);
+        }
+    }
+    fileInput.value = '';
+    renderPreviews();
+    if (errors.length) showError(errors.join(' '));
+}
+
+async function poll(id, controller) {
     try {
-        const response = await fetch(`${API_BASE}/upload`, {
-            method: 'POST',
-            body: formData
-        });
-        
-        if (!response.ok) throw new Error('Upload failed');
-        
-        const data = await response.json();
-        currentJobId = data.job_id;
-        
-        pollStatus(currentJobId);
-    } catch (err) {
-        alert("Error: " + err.message);
-        resetApp();
-    }
-}
-
-async function pollStatus(jobId) {
-    try {
-        const response = await fetch(`${API_BASE}/status/${jobId}`);
-        const data = await response.json();
-        
-        statusText.textContent = data.message || "Processing...";
-
+        const data = await getJSON(`/status/${id}`, { signal: controller.signal });
+        if (activeRequest !== controller) return;
+        statusText.textContent = data.message || 'Processing…';
+        if (data.status === 'error') throw new Error(data.message || 'Analysis failed.');
         if (data.status === 'done') {
-            fetchResults(jobId);
-        } else if (data.status === 'error') {
-            throw new Error(data.message || "Processing failed");
+            const response = await getJSON(`/results/${id}`, { signal: controller.signal });
+            if (activeRequest !== controller) return;
+            cachedResults = response.results || [];
+            renderResults();
+            switchSection('results');
+            activeRequest = null;
         } else {
-            setTimeout(() => pollStatus(jobId), 2000);
+            pollTimer = setTimeout(() => poll(id, controller), POLL_INTERVAL_MS);
         }
-    } catch (err) {
-        alert("Error: " + err.message);
-        resetApp();
+    } catch (error) {
+        if (activeRequest !== controller || error.name === 'AbortError') return;
+        stopRequests();
+        statusText.textContent = 'Analysis interrupted';
+        showError(error.message);
+        byId('retry-status-btn').hidden = false;
     }
 }
 
-async function fetchResults(jobId) {
+async function upload() {
+    if (!selectedFiles.length || activeRequest) return;
+    stopRequests();
+    showError('');
+    cachedResults = [];
+    csvButton.disabled = true;
+    currentJobId = null;
+    const controller = new AbortController();
+    activeRequest = controller;
+    switchSection('processing');
+    byId('retry-status-btn').hidden = true;
+    statusText.textContent = 'Uploading…';
+    const body = new FormData();
+    selectedFiles.forEach(file => body.append('files', file));
+    body.append('original_names', JSON.stringify(selectedFiles.map(file => file.name)));
     try {
-        statusText.textContent = "Loading results...";
-        const response = await fetch(`${API_BASE}/results/${jobId}`);
-        const data = await response.json();
-        
-        renderResults(data);
-        switchSection('results');
-    } catch (err) {
-        alert("Error fetching results: " + err.message);
-        resetApp();
+        const data = await getJSON('/upload', { method: 'POST', body, signal: controller.signal });
+        if (activeRequest !== controller) return;
+        currentJobId = data.job_id;
+        await poll(currentJobId, controller);
+    } catch (error) {
+        if (activeRequest !== controller || error.name === 'AbortError') return;
+        stopRequests();
+        switchSection('upload');
+        showError(error.message);
     }
 }
 
-function getHealthStatusInfo(ratio) {
-    if (ratio < 0.40) return { label: 'Underweight', class: 'under' };
-    if (ratio < 0.50) return { label: 'Healthy', class: 'healthy' };
-    if (ratio < 0.60) return { label: 'Increased Risk', class: 'increased' };
-    return { label: 'High Risk', class: 'high' };
+function validMeasurement(person) {
+    const measurements = [person.ratio, person.waist_cm, person.height_cm];
+    return person.status !== 'Invalid'
+        && measurements.every(value => Number.isFinite(value) && value > 0);
 }
 
-let cachedResults = null;
-
-function renderResults(data) {
-    resultsContainer.innerHTML = '';
-    
-    const results = data.results || [];
-    cachedResults = results;
-
-    if (results.length === 0) {
-        resultsContainer.innerHTML = '<p class="muted">No results found.</p>';
-        return;
-    }
-
-    results.forEach(imgResult => {
-        const group = document.createElement('div');
-        group.className = 'image-result-group';
-        
-        let html = '';
-        
-        if (imgResult.result_image) {
-            const encodedImg = encodeURIComponent(imgResult.result_image);
-            const imgUrl = `${API_BASE}/files/result-img/${encodedImg}`;
-            html += `<img src="${imgUrl}" class="annotated-img" alt="Analyzed Image">`;
-        }
-        
-        html += `<h3 style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem;">${imgResult.image_name}</h3>`;
-        html += `<div class="person-cards">`;
-
-        if (!imgResult.persons || imgResult.persons.length === 0) {
-            html += `<p class="muted">No people detected in this image.</p>`;
-        } else {
-            imgResult.persons.forEach(person => {
-                const health = getHealthStatusInfo(person.ratio);
-                const confPercent = Math.round(person.confidence * 100);
-                
-                html += `
-                    <div class="person-card">
-                        <div class="card-header">
-                            <span class="muted">Person ${person.person_id}</span>
-                            <span class="badge ${health.class}">${health.label}</span>
-                        </div>
-                        <div style="text-align: center; margin: 1.5rem 0;">
-                            <div class="muted">WHR (Waist-to-Height Ratio)</div>
-                            <div class="whr-value" style="color: var(--status-${health.class})">${person.ratio.toFixed(3)}</div>
-                        </div>
-                        <div class="measurements">
-                            <div class="measure">
-                                <div class="label">Waist</div>
-                                <div class="val">${person.waist_cm.toFixed(1)} cm</div>
-                            </div>
-                            <div class="measure">
-                                <div class="label">Height</div>
-                                <div class="val">${person.height_cm.toFixed(1)} cm</div>
-                            </div>
-                        </div>
-                        <div class="confidence">
-                            <div style="display:flex; justify-content:space-between; font-size:0.85rem">
-                                <span class="muted">AI Confidence</span>
-                                <span>${confPercent}%</span>
-                            </div>
-                            <div class="confidence-bar">
-                                <div class="confidence-fill" style="width: ${confPercent}%"></div>
-                            </div>
-                        </div>
-                        ${person.flags && person.flags.length ? `<div style="margin-bottom: 1rem; color: var(--status-increased); font-size: 0.85rem;">⚠️ ${person.flags.join(', ')}</div>` : ''}
-                        <button class="btn viewer-btn" data-obj="${person.obj_file}">View 3D Model</button>
-                    </div>
-                `;
-            });
-        }
-        
-        html += `</div>`;
-        group.innerHTML = html;
-        resultsContainer.appendChild(group);
-    });
-
-    document.querySelectorAll('.viewer-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            const objFile = e.target.getAttribute('data-obj');
-            if (objFile) launch3DViewer(objFile);
-        });
-    });
+function format(value, digits = 1) {
+    return Number.isFinite(value) ? value.toFixed(digits) : 'Unavailable';
 }
 
-function launch3DViewer(objFilename) {
-    viewerModal.classList.remove('hidden');
-    
-    // Setup Scene
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0a0e1a);
-    currentScene = scene;
+function formatConfidence(value) {
+    if (!Number.isFinite(value)) return 'Unavailable';
+    const percentage = Math.round(Math.min(1, Math.max(0, value)) * 100);
+    return `${percentage}%`;
+}
 
-    // Setup Camera
-    const camera = new THREE.PerspectiveCamera(45, canvasContainer.clientWidth / canvasContainer.clientHeight, 0.1, 100);
-    camera.position.set(0, 0, 3);
-
-    // Setup Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
-    canvasContainer.innerHTML = '';
-    canvasContainer.appendChild(renderer.domElement);
-    currentRenderer = renderer;
-
-    // Controls
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-    controls.autoRotate = true;
-    controls.autoRotateSpeed = 2.0;
-    
-    controls.addEventListener('start', () => {
-        controls.autoRotate = false;
-    });
-
-    // Lights
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-    scene.add(ambientLight);
-
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    dirLight.position.set(5, 5, 5);
-    scene.add(dirLight);
-
-    // Grid (Subtle)
-    const grid = new THREE.GridHelper(10, 10, 0x4a9eff, 0x4a9eff);
-    grid.material.opacity = 0.1;
-    grid.material.transparent = true;
-    grid.position.y = -1;
-    scene.add(grid);
-
-    // Load OBJ
-    const loader = new OBJLoader();
-    const objUrl = `${API_BASE}/files/obj/${encodeURIComponent(objFilename)}`;
-    
-    loader.load(
-        objUrl,
-        (object) => {
-            const material = new THREE.MeshPhongMaterial({
-                color: 0xA5C8E1,
-                shininess: 30,
-                side: THREE.DoubleSide
-            });
-            
-            object.traverse((child) => {
-                if (child.isMesh) {
-                    child.material = material;
-                }
-            });
-
-            // Center mesh
-            const box = new THREE.Box3().setFromObject(object);
-            const center = box.getCenter(new THREE.Vector3());
-            object.position.sub(center);
-
-            // Scale if needed (assuming roughly meters, scale to fit view)
-            const size = box.getSize(new THREE.Vector3());
-            const maxDim = Math.max(size.x, size.y, size.z);
-            if(maxDim > 0) {
-                const scale = 2 / maxDim; // Fit within 2 units
-                object.scale.setScalar(scale);
-            }
-
-            scene.add(object);
-        },
-        (xhr) => {
-            console.log((xhr.loaded / xhr.total * 100) + '% loaded');
-        },
-        (error) => {
-            console.error('Error loading OBJ:', error);
-            alert("Failed to load 3D model.");
-        }
+function personCard(person) {
+    const valid = validMeasurement(person);
+    const card = element('div', 'person-card');
+    const header = element('div', 'card-header');
+    const statusClass = valid ? STATUS_COLORS[person.status] || '' : 'invalid';
+    const statusLabel = valid ? person.status : 'Invalid';
+    header.append(
+        element('span', 'muted', `Person ${person.person_id}`),
+        element('span', `badge ${statusClass}`, statusLabel),
     );
-
-    // Animation Loop
-    function animate() {
-        animationId = requestAnimationFrame(animate);
-        if (controls) controls.update();
-        renderer.render(scene, camera);
+    const ratio = element('div', 'ratio-summary');
+    ratio.append(
+        element('div', 'muted', 'Waist-to-height ratio'),
+        element('div', 'whr-value', valid ? format(person.ratio, 3) : 'Unavailable'),
+    );
+    const measurements = element('div', 'measurements');
+    for (const [label, value] of [['Waist', person.waist_cm], ['Height', person.height_cm]]) {
+        const measure = element('div', 'measure');
+        measure.append(
+            element('div', 'label', label),
+            element('div', 'val', valid ? `${format(value)} cm` : 'Unavailable'),
+        );
+        measurements.append(measure);
     }
-    animate();
-
-    // Resize handler
-    window.addEventListener('resize', onWindowResize);
+    const confidence = formatConfidence(person.confidence);
+    const viewer = element('button', 'btn viewer-btn', 'View 3D Model');
+    viewer.disabled = !person.obj_file;
+    viewer.onclick = () => openViewer(person.obj_file);
+    card.append(
+        header, ratio, measurements,
+        element('p', 'confidence muted', `AI confidence: ${confidence}`),
+    );
+    if (person.flags?.length) {
+        card.append(element('p', 'measurement-flags', person.flags.join(', ')));
+    }
+    card.append(viewer);
+    return card;
 }
 
-function onWindowResize() {
-    if (!currentRenderer || !currentScene) return;
-    const camera = currentScene.children.find(c => c.isPerspectiveCamera);
-    if (camera) {
-        camera.aspect = canvasContainer.clientWidth / canvasContainer.clientHeight;
-        camera.updateProjectionMatrix();
-        currentRenderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+function renderResults() {
+    resultsContainer.replaceChildren();
+    csvButton.disabled = !cachedResults.some(image => image.persons?.length);
+    if (!cachedResults.length) {
+        resultsContainer.append(element('p', 'muted',
+            'No results found. Try a clear, full-body image.'));
+    }
+    for (const result of cachedResults) {
+        const group = element('div', 'image-result-group');
+        if (result.result_image) {
+            const image = element('img', 'annotated-img');
+            image.src = `/files/result-img/${encodeURIComponent(result.result_image)}`;
+            image.alt = `Analysis of ${result.image_name}`;
+            image.onerror = () => {
+                image.replaceWith(element('p', 'muted', 'The annotated image could not be loaded.'));
+            };
+            group.append(image);
+        }
+        group.append(element('h3', 'result-name muted', result.image_name));
+        const cards = element('div', 'person-cards');
+        for (const person of result.persons || []) cards.append(personCard(person));
+        if (!result.persons?.length) {
+            cards.append(element('p', 'muted',
+                'No people detected. Try a clear, full-body image.'));
+        }
+        group.append(cards);
+        resultsContainer.append(group);
     }
 }
 
-function closeViewer() {
-    viewerModal.classList.add('hidden');
-    if (animationId) cancelAnimationFrame(animationId);
-    if (currentRenderer) {
-        currentRenderer.dispose();
-        canvasContainer.innerHTML = '';
-    }
-    window.removeEventListener('resize', onWindowResize);
-    controls = null;
-    currentScene = null;
-    currentRenderer = null;
+function csvCell(value) {
+    let text = String(value ?? '');
+    // CSV quoting alone does not stop spreadsheets from evaluating formulas.
+    if (/^[\s]*[=+\-@]/.test(text) || /^[\t\r\n]/.test(text)) text = `'${text}`;
+    return `"${text.replaceAll('"', '""')}"`;
 }
 
-function downloadCSV(jobId) {
-    if (!jobId || !cachedResults) return;
-    
-    let csv = 'Image,Person_ID,Waist_cm,Height_cm,Waist_Height_Ratio,Status,Confidence\n';
-    cachedResults.forEach(img => {
-        (img.persons || []).forEach(p => {
-            csv += `${img.image_name},${p.person_id},${p.waist_cm.toFixed(2)},${p.height_cm.toFixed(2)},${p.ratio.toFixed(4)},${p.status},${p.confidence.toFixed(2)}\n`;
-        });
-    });
-    
-    const blob = new Blob([csv], { type: 'text/csv' });
+function downloadCSV() {
+    const rows = [[
+        'Image', 'Person_ID', 'Waist_cm', 'Height_cm',
+        'Waist_Height_Ratio', 'Status', 'Confidence',
+    ]];
+    for (const image of cachedResults) {
+        for (const person of image.persons || []) {
+            const valid = validMeasurement(person);
+            rows.push([
+                image.image_name,
+                person.person_id,
+                valid ? format(person.waist_cm, 2) : '',
+                valid ? format(person.height_cm, 2) : '',
+                valid ? format(person.ratio, 4) : '',
+                valid ? person.status : 'Invalid',
+                Number.isFinite(person.confidence) ? format(person.confidence, 2) : '',
+            ]);
+        }
+    }
+    const csv = rows.map(row => row.map(csvCell).join(',')).join('\r\n');
+    const blob = new Blob(['\ufeff', csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'bodyscan_results.csv';
-    a.click();
-    URL.revokeObjectURL(url);
+    const link = element('a');
+    link.href = url;
+    link.download = 'bodyscan_results.csv';
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function resetApp() {
+    stopRequests();
+    closeViewer();
     selectedFiles = [];
+    cachedResults = [];
     currentJobId = null;
-    fileInput.value = '';
-    thumbnailGrid.innerHTML = '';
-    previewContainer.classList.add('hidden');
+    csvButton.disabled = true;
+    resultsContainer.replaceChildren();
+    renderPreviews();
+    showError('');
     switchSection('upload');
 }
+
+dropZone.addEventListener('dragover', event => {
+    event.preventDefault();
+    dropZone.classList.add('dragover');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', event => {
+    event.preventDefault();
+    dropZone.classList.remove('dragover');
+    addFiles(event.dataTransfer.files);
+});
+byId('browse-btn').addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => addFiles(fileInput.files));
+analyze.addEventListener('click', upload);
+byId('new-analysis-btn').addEventListener('click', resetApp);
+byId('back-btn').addEventListener('click', () => {
+    stopRequests();
+    switchSection('upload');
+    showError('');
+});
+byId('retry-status-btn').addEventListener('click', () => {
+    if (!currentJobId) return;
+    stopRequests();
+    showError('');
+    byId('retry-status-btn').hidden = true;
+    activeRequest = new AbortController();
+    poll(currentJobId, activeRequest);
+});
+csvButton.addEventListener('click', downloadCSV);
+window.addEventListener('pagehide', () => {
+    stopRequests();
+    closeViewer();
+    previewUrls.forEach(url => URL.revokeObjectURL(url));
+});

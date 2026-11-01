@@ -1,0 +1,2 @@
+# Shared formatter/linter version for local commands and GitHub Actions.
+ruff==0.12.0

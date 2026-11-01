@@ -1,193 +1,152 @@
-# AIBodyScanner — Body Composition Estimator
+# BodyScan
 
-An AI-powered web app that estimates body composition metrics (waist-to-height ratio) from a single photo. Upload an image of a person, and the system outputs their estimated waist circumference, height, and health classification.
+A small local app that reconstructs a body mesh from photos with 4D-Humans/HMR2,
+shows approximate waist and height measurements, and opens the mesh in Three.js.
+FastAPI serves the API and plain HTML/CSS/JavaScript together. No frontend build,
+database, account system, or external 3D library CDN is needed.
 
----
+## Layout
 
-## What it does
-
-1. You upload one or more images through a web interface.
-2. YOLOv8 detects every person in the image.
-3. For each detected person, the 4D-Humans model (HMR2) reconstructs a 3D body mesh from the 2D photo.
-4. The waist and height are measured directly from that 3D mesh.
-5. A waist-to-height ratio (WHR) is calculated and classified into a health category.
-6. You get back the annotated image, the measurements, and (optionally) the 3D mesh to look at.
-
----
-
-## How it works under the hood
-
-### 4D-Humans / HMR2
-
-4D-Humans is a research model from the University of Pennsylvania that estimates the 3D pose and shape of a human body from a single RGB image. It outputs a SMPL body mesh — a standard parametric human body model with ~6890 vertices.
-
-The key insight: instead of measuring waist size from the photo directly (which is basically impossible accurately), we reconstruct the 3D body, then slice the mesh at the anatomically correct waist level (around the navel), and measure the cross-section. This gives a real centimeter estimate, not a pixel count.
-
-Internally it uses:
-- **ViT-based backbone** (Vision Transformer) to encode image features
-- **SMPL body model** to output the body mesh
-- **YOLOv8x** for person detection before the body reconstruction step
-
-### Waist measurement approach
-
-The waist is estimated using a combination of three methods:
-1. A horizontal plane cut at the navel height (midpoint between hip joints and shoulder joints)
-2. A convex hull of the cross-section to get the perimeter
-3. A joint-based width ratio as a fallback sanity check
-
-The final waist number is a weighted blend of these, with a confidence score that tells you how reliable the estimate is.
-
-### Health classification (WHR thresholds)
-
-| WHR | Category |
-|-----|----------|
-| < 0.40 | Underweight |
-| 0.40 – 0.49 | Healthy |
-| 0.50 – 0.59 | Increased Risk |
-| ≥ 0.60 | High Risk |
-
-These are based on established clinical guidelines.
-
----
-
-## Tech stack
-
-| Layer | What it uses |
-|-------|-------------|
-| Body reconstruction | 4D-Humans (HMR2) + SMPL |
-| Person detection | YOLOv8x (Ultralytics) |
-| Backend API | FastAPI + Uvicorn |
-| Frontend | Vanilla HTML, CSS, JavaScript |
-| 3D mesh viewing | Three.js + OBJLoader |
-| Python environment | Python 3.9 (Required) |
-
----
-
-## Project structure
-
-```
-AIBodyScanner/
-├── 4DHumans_mps_patches.patch  # Patch to make 4D-Humans run on Apple Silicon
-├── 4D-Humans/                  # Clone this separately — not included in repo
-│   ├── example_data/images/    # Input images go here temporarily
-│   ├── demo_out/               # Output: annotated images, .obj files, CSV
-│   └── hmr2/                   # 4D-Humans model code
-│
-└── web/
-    ├── demo_simple.py          # Core inference logic (load_models, run_inference)
-    ├── backend/
-    │   └── main.py             # FastAPI server, job queue, file serving
-    └── frontend/
-        ├── index.html
-        ├── style.css
-        └── app.js
+```text
+web/
+  server.py          # Upload validation, serial job worker, API, static files
+  inference.py       # Model loading, mesh export, existing measurement methods
+  frontend/
+    index.html
+    style.css
+    app.js           # Uploads, polling, results, CSV
+    viewer.js        # Mesh loading, camera, controls, resource cleanup
+    vendor/three/    # Three.js 0.170.0 and the two required addons, MIT license
+tests/test_server.py  # API checks with stub inference
+4D-Humans/           # External research dependency; ignored by Git
+body_models/         # Local model weights; ignored by Git
 ```
 
+Uploaded images and generated artifacts remain in
+`4D-Humans/example_data/images/` and `4D-Humans/demo_out/`, so existing files
+continue to work. The external model code and licensed weights are not vendored
+into this app's source.
 
+## Setup
 
+Use Python 3.9 and the existing `hmr_inference` conda environment if available.
+For a fresh checkout, clone the research dependency and apply the Apple Silicon
+patch:
 
-## How to run it
-
-Complete setup in order:
-
-**1. Clone this repo**
-```bash
-git clone https://github.com/AnanthCSE379/AIBodyScanner.git
-cd AIBodyScanner
-```
-
-**2. Clone 4D-Humans and apply the MPS patch**
 ```bash
 git clone https://github.com/shubham-goel/4D-Humans.git
-cd 4D-Humans
-git apply ../4DHumans_mps_patches.patch
-cd ..
+git -C 4D-Humans apply ../4DHumans_mps_patches.patch
 ```
 
-**3. Install Python dependencies (Python 3.9 required)**
+For a fresh environment, follow the research project's installation instructions
+for its ML dependencies, then install the web app dependencies in that same
+environment:
+
 ```bash
-pip install torch torchvision torchaudio
-pip install trimesh scipy numpy opencv-python
-pip install ultralytics
-pip install fastapi uvicorn python-multipart
+make install
 ```
 
-**4. Download SMPL model files manually**
+The cleanup has been checked with the existing `hmr_inference` environment;
+`requirements.txt` supplies the web/runtime additions, not a complete ML lockfile.
 
-Place these three files in `body_models/smpl/`:
+Place the licensed SMPL files in `body_models/smpl/`:
+
 - `basicModel_neutral_lbs_10_207_0_v1.0.0.pkl`
 - `SMPL_MALE.pkl`
 - `SMPL_FEMALE.pkl`
 
-Download from the [HMR 2.0 / 4D-Humans website](https://shubham-goel.github.io/4dhumans/) or the [SMPL portal](https://smpl.is.tue.mpg.de/).
+Obtain these through the [SMPL portal](https://smpl.is.tue.mpg.de/) and follow its
+license terms. HMR2 downloads its checkpoint on first startup. The detector uses
+`body_models/yolov8x.pt`, downloading it there if it is absent. First startup
+requires internet access and may take several minutes. Once weights are cached,
+the viewer and inference do not require a CDN connection.
 
-*(The YOLOv8 weights and HMR2 model checkpoint download automatically on first run.)*
+## Run
 
-**5. Start the server**
+From the project root:
+
 ```bash
-cd web/backend
-python -m uvicorn main:app --host 0.0.0.0 --port 8000
+conda activate hmr_inference
+make dashboard
 ```
 
-> **Important:** Run this with the Python environment that has all the ML packages installed. If you're using conda: `conda run -n <your_env> --no-capture-output python -m uvicorn main:app --host 0.0.0.0 --port 8000`
+Open [BodyScan](http://127.0.0.1:8000). Wait for the server to finish loading the
+models before opening the page. Run **one server process**: the model, queue,
+and job history are held in memory. The existing device selection uses MPS on
+supported Apple Silicon machines and CPU otherwise.
 
-Then open **http://localhost:8000** in your browser.
+Select up to 10 JPEG/PNG images, each up to 20 MB and 25 megapixels. Use clear,
+full-body photos. You can remove selected images before analysis. The worker
+processes one job at a time, with up to four more jobs accepted. A full queue
+returns a retryable error. Returning to the upload screen does not cancel an
+accepted job.
 
-First startup takes 1–2 minutes — the HMR2 model checkpoint and YOLO weights need to load into memory. After that it stays warm until you stop the server.
+Results include annotated images, per-person measurements, a CSV download, and
+an interactive mesh viewer. Drag to rotate, scroll/pinch to zoom, right-drag to
+pan, and use Reset view to frame the mesh. Escape closes the viewer.
 
----
+## API and files
 
-## Limitations
+- `POST /upload`: multipart `files`; optional JSON array `original_names` preserves
+  exact display names when multipart header encoding changes them. Returns `job_id`.
+- `GET /status/{job_id}`: `queued`, `running`, `done`, or `error`, plus a message.
+- `GET /results/{job_id}`: existing per-image `results` and per-person measurements.
+  Non-finite values become JSON `null`; the UI shows invalid values as unavailable.
+- `GET /files/result-img/{filename}` and `GET /files/obj/{filename}`: output artifacts
+  only; filenames may contain spaces/Unicode but cannot be paths or symlinks.
+- `DELETE /cleanup/{job_id}`: deletes the job's generated inputs and outputs;
+  queued/running jobs return HTTP 409.
 
-**Accuracy is rough, not clinical-grade.**
-The waist estimate can be off by 5–15 cm depending on clothing, pose, and image quality. This is expected — we're estimating a 3D body from a single 2D photo, which is an inherently ambiguous problem. The model makes assumptions about body shape that may not match reality.
+The server does not automatically delete completed jobs or photos. Restarting
+clears job history but keeps files. Keep this local app bound to localhost.
+Upload errors retain the selected files; connection errors during processing
+allow retrying status without uploading again.
 
-**It needs a clear, full-body photo.**
-The body reconstruction works best when the whole person is visible — head to toe. Cropped images, extreme angles, or people sitting down will give bad or failed results. The person should ideally be facing the camera roughly straight-on.
+## Development commands
 
-**One person works better than many.**
-While it can handle multiple people in a frame, accuracy drops in crowded images because the detection boxes can overlap and the mesh reconstruction gets confused.
+Activate the Python 3.9 environment first, then use these four targets:
 
-**Clothing throws it off.**
-The model estimates the underlying body shape, but it was trained mostly on images without heavy winter clothing. Thick jackets, baggy clothes, etc. will cause the mesh to bloat and overestimate waist size.
+| Command | Purpose |
+| --- | --- |
+| `make install` | Install app dependencies and the pinned Ruff formatter/linter. |
+| `make format` | Format Python code in `web/` and `tests/`. |
+| `make lint` | Check Python lint rules and formatting without modifying files. |
+| `make dashboard` | Start BodyScan at `http://127.0.0.1:8000`. |
 
-**It runs on MPS (Apple Silicon) right now.**
-The inference runs on the Mac GPU via PyTorch MPS. This works but is slower than CUDA and occasionally triggers warnings about unsupported operations that fall back to CPU. On a machine with an NVIDIA GPU, switching to CUDA would be significantly faster — this is not yet configured.
+The default `make` command runs `lint`. To select a specific environment without
+activating it, use `make lint PYTHON=/path/to/environment/bin/python`.
+The research dependency, model files, and vendored Three.js code are excluded from
+formatting and linting. These targets cover Python; frontend changes still need
+a browser check.
 
----
+GitHub Actions runs `make lint` on pushes and pull requests. It installs only
+`requirements-dev.txt`, so code checks need no model weights or ML downloads.
 
-## Work in progress / known issues
+## Checks
 
-**3D mesh viewer.**
-The "View 3D Model" button in the UI currently doesn't load the model properly. The OBJ file is generated correctly and saved to `demo_out/`, but there's an issue with how it gets served and loaded in the browser.
+```bash
+python -m unittest discover -s tests -v
+python -m compileall -q web tests
+```
 
-**No CUDA support configured.**
-The backend auto-selects MPS on Apple Silicon. For a machine with an NVIDIA GPU, you'd need to change the device selection logic in `demo_simple.py`. This is straightforward but not yet done.
+The API tests use stub inference and temporary files, covering upload validation,
+filename round-tripping, serialized jobs, queue capacity, model failure recovery,
+artifact containment, cleanup, and local viewer modules. A real-model smoke test
+also requires the checkpoints, licensed SMPL files, and ML dependencies.
 
-**The app serves one job at a time.**
-App to be scaled to concurrently handle multiple jobs soon.
+## Measurement limits
 
-**Images are named after the job ID + original filename.**
-If your original file has spaces in the name (e.g. `arun j.png`), that can cause URL encoding issues in some browsers when trying to view the results. Renaming your files to use underscores before uploading avoids this.
-
-**CSV download.**
-There's a "Download CSV" button in the results view that isn't wired up yet.
-
----
-
-## What's next
-
-- Fix the 3D OBJ viewer
-- Wire up the CSV download
-- CUDA support for non-Mac machines  
-- Better error messages when a person isn't detected
-- Batch processing improvements and a proper job queue
-- Height calibration — right now height is estimated from the mesh which can be off; using a reference object in the frame would improve accuracy a lot
-
----
+The reconstruction and measurement algorithms are unchanged. Single-photo
+estimates vary with clothing, pose, and image quality; they are not clinical
+measurements. The existing category labels and thresholds are preserved rather
+than revalidated by this cleanup. “AI confidence” is the existing measurement
+heuristic, not a calibrated probability. Zero, missing, or non-finite measurements
+are shown as invalid rather than assigned a category.
 
 ## Credits
 
-- [4D-Humans (HMR2)](https://github.com/shubham-goel/4D-Humans) by Goel et al., UPenn — the body reconstruction model
-- [SMPL](https://smpl.is.tue.mpg.de/) — the parametric body model
-- [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics) — person detection
+[4D-Humans](https://github.com/shubham-goel/4D-Humans),
+[SMPL](https://smpl.is.tue.mpg.de/),
+[Ultralytics](https://github.com/ultralytics/ultralytics), and
+[Three.js](https://threejs.org/). Third-party projects and model weights retain
+their own licenses.

@@ -12,7 +12,7 @@
     --status-high: #ef5350;
     --status-under: #42a5f5;
     
-    --font-main: 'Inter', sans-serif;
+    --font-main: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
 * {
@@ -379,9 +379,44 @@ section.active {
     transform: scale(1.1);
 }
 
-#3d-canvas-container {
+#viewer-canvas {
     width: 100%;
     height: 100%;
 }
 
 .hidden { display: none !important; }
+
+/* Layout and states shared by upload, results, and the viewer. */
+[hidden] { display: none !important; }
+button:disabled { opacity: 0.5; cursor: default; }
+button:focus-visible, a:focus-visible, label:focus-within { outline: 2px solid var(--secondary); outline-offset: 4px; }
+.actions { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+.app-error { padding: 1rem; margin-bottom: 1rem; border: 1px solid var(--status-high); border-radius: 8px; overflow-wrap: anywhere; }
+.preview-item { width: 100px; display: flex; flex-direction: column; gap: 0.4rem; }
+.preview-name { font-size: 0.75rem; overflow-wrap: anywhere; }
+.remove-file { background: transparent; color: var(--text-main); border: 1px solid var(--card-border); border-radius: 4px; padding: 0.25rem; cursor: pointer; }
+.result-name { font-size: 0.9rem; margin-bottom: 1rem; overflow-wrap: anywhere; }
+.ratio-summary { text-align: center; margin: 1.5rem 0; }
+.measurement-flags { color: var(--status-increased); margin-bottom: 1rem; }
+.badge.invalid { color: var(--text-muted); border: 1px solid var(--card-border); }
+.processing-container { gap: 1rem; text-align: center; }
+.viewer-open { overflow: hidden; }
+.viewer-toolbar { position: absolute; top: 1rem; left: 1rem; right: 5rem; display: flex; align-items: center; gap: 1rem; z-index: 2; }
+.viewer-toolbar h2 { font-size: 1rem; }
+.viewer-message { position: absolute; top: 50%; left: 10%; right: 10%; text-align: center; pointer-events: none; }
+.viewer-message button { pointer-events: auto; margin-top: 1rem; }
+.viewer-help { position: absolute; bottom: 1rem; width: 100%; text-align: center; font-size: 0.8rem; pointer-events: none; }
+#viewer-canvas canvas { display: block; touch-action: none; }
+@media (max-width: 600px) {
+    .app-container { padding: 1rem; }
+    .results-header { flex-direction: column; align-items: flex-start; gap: 1rem; }
+    .person-cards { grid-template-columns: minmax(0, 1fr); }
+    .person-card, .image-result-group { padding: 1rem; min-width: 0; }
+    .card-header { flex-wrap: wrap; gap: 0.5rem; }
+    .measurements { gap: 0.5rem; }
+    .measure { min-width: 0; padding: 0.75rem 0.25rem; }
+    .measure .val { font-size: 1rem; }
+    .drop-zone { padding: 2rem 1rem; }
+    .modal-content { width: 96vw; height: 90dvh; }
+    .viewer-toolbar { flex-wrap: wrap; gap: 0.5rem; }
+}

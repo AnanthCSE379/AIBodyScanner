@@ -1,4 +1,5 @@
 # Python
+.ruff_cache/
 __pycache__/
 **/__pycache__/
 *.py[cod]
@@ -33,8 +34,6 @@ body_models/
 # Input/output directories
 4D-Humans/example_data/images/
 4D-Humans/demo_out/
-web/backend/demo_out/
-web/backend/example_data/
 
 # Large installer files
 *.sh
