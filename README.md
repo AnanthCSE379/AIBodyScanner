@@ -1,5 +1,7 @@
 # BodyScan
 
+[![Code checks](https://github.com/AnanthCSE379/AIBodyScanner/actions/workflows/ci.yml/badge.svg)](https://github.com/AnanthCSE379/AIBodyScanner/actions/workflows/ci.yml)
+
 A small local app that reconstructs a body mesh from photos with 4D-Humans/HMR2,
 shows approximate waist and height measurements, and opens the mesh in Three.js.
 FastAPI serves the API and plain HTML/CSS/JavaScript together. No frontend build,
